@@ -1627,22 +1627,54 @@ let gastoNextId = 10;
 const DEFAULT_GASTOS_FIJOS = [{"id": 2, "nombre": "Claude (IA)", "monto": 20, "moneda": "USD", "freq": "mensual"}, {"id": 105, "nombre": "Tiendanube", "monto": 26000, "moneda": "ARS", "freq": "mensual"}, {"id": 106, "nombre": "Verificado Ig", "monto": 7, "moneda": "USD", "freq": "mensual"}];
 const DEFAULT_GASTOS_VAR = [{"id": 101, "nombre": "Bolsas e-commerce", "monto": 0, "moneda": "ARS", "fecha": "", "nota": ""}, {"id": 102, "nombre": "Stickers", "monto": 0, "moneda": "ARS", "fecha": "", "nota": ""}, {"id": 103, "nombre": "Tarjetas presentación", "monto": 0, "moneda": "ARS", "fecha": "", "nota": ""}, {"id": 104, "nombre": "Empleado", "monto": 0, "moneda": "ARS", "fecha": "", "nota": ""}];
 
+
+
+// ════════════════════════════════
+// STORAGE — Firebase + localStorage
+// ════════════════════════════════
+async function saveStorage() {
+  try {
+    showSaving();
+    const data = {
+      userDB:      USER_DB,
+      gastosFijos: GASTOS_FIJOS,
+      gastosVar:   GASTOS_VAR,
+      parcels:     PARCELS,
+      proy:        PROY,
+      dolar:       DOLAR || 1435
+    };
+    // 1. localStorage inmediato (offline backup)
+    localStorage.setItem('chyck_data', JSON.stringify(data));
+    // 2. Firebase (sync entre dispositivos)
+    if (window._fbReady && window._fbSave) {
+      await window._fbSave(data);
+    }
+    showSaved();
+  } catch(e) {
+    console.error('Error guardando:', e);
+    showSaved();
+  }
+}
+
 async function loadStorage() {
   try {
-    // Try Firebase first (cross-device sync)
-    if (window._fbReady) {
+    // Intentar Firebase primero
+    if (window._fbReady && window._fbLoad) {
       const data = await window._fbLoad();
-      if (data) {
+      if (data && Object.keys(data).length > 0) {
         _applyStorageData(data);
         return;
       }
     }
-  } catch(e) { console.warn('Firebase load failed, using localStorage:', e); }
+  } catch(e) {
+    console.warn('Firebase load failed, usando localStorage:', e);
+  }
   // Fallback: localStorage
   try {
     const raw = localStorage.getItem('chyck_data');
-    if (raw) _applyStorageData(JSON.parse(raw));
-    else {
+    if (raw) {
+      _applyStorageData(JSON.parse(raw));
+    } else {
       GASTOS_FIJOS = JSON.parse(JSON.stringify(DEFAULT_GASTOS_FIJOS));
       GASTOS_VAR   = JSON.parse(JSON.stringify(DEFAULT_GASTOS_VAR));
       PARCELS = [];
@@ -1677,29 +1709,6 @@ function _applyStorageData(data) {
 
 
 
-async function saveStorage() {
-  try {
-    showSaving();
-    const data = {
-      userDB: USER_DB,
-      gastosFijos: GASTOS_FIJOS,
-      gastosVar: GASTOS_VAR,
-      parcels: PARCELS,
-      proy: PROY,
-      dolar: DOLAR || 1435
-    };
-    // Save to localStorage immediately (fast, offline)
-    localStorage.setItem('chyck_data', JSON.stringify(data));
-    // Save to Firebase (cross-device sync)
-    if (window._fbReady) {
-      await window._fbSave(data);
-    }
-    showSaved();
-  } catch(e) {
-    console.error('Error guardando:', e);
-    showSaved(); // still show saved since localStorage worked
-  }
-}
 
 
 
@@ -1904,6 +1913,7 @@ function doLogin() {
 
 async function initApp() {
   document.getElementById('app').style.display = 'block';
+  await loadStorage();
   proyLoad();
   proyActualizarConVentas();
   nav('dashboard', document.querySelector('.tab'));
@@ -1975,8 +1985,8 @@ function handleImportMain(input) {
   reader.readAsText(file);
 }
 
-window.addEventListener('DOMContentLoaded', () => {
-  loadStorage();
+window.addEventListener('DOMContentLoaded', async () => {
+  await loadStorage();
   initStock();
   initCostosSelect();
   // Don't render dash yet — wait for login
