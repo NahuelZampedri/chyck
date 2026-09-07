@@ -652,7 +652,7 @@ td.g2{color:var(--g2)}
       <div><div style="font-size:10px;color:var(--g2);font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px">Ganancia</div><div style="font-size:16px;font-weight:700" id="cr-gan">—</div></div>
       <div><div style="font-size:10px;color:var(--g2);font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px">Margen %</div><div style="font-size:20px;font-weight:700" id="cr-mar">—</div></div>
     </div>
-    <button class="btn-add" id="c-save-btn" onclick="cSave()" style="margin-top:10px;display:none">💾 Guardar en Stock</button>
+    <button class="btn-add" id="c-save-btn" onclick="cSave()" style="margin-top:10px;display:none">💾 Guardar Costo</button>
   </div>
   <div class="fb">
     <label>Buscar</label><input id="cosq" type="text" placeholder="nombre del producto…" oninput="renderCostos()" style="width:220px">
@@ -1399,13 +1399,21 @@ function cSave() {
   if (!cLast) return;
   const compUSD = parseFloat(document.getElementById('c-usd').value)||0;
   const kg = parseFloat(document.getElementById('c-kg').value)||0;
+  const precio = cLast.precio || 0;
   const compARS = compUSD * DOLAR;
   const flet = kg * 52 * DOLAR;
   const ext = compARS * 0.15;
   const tot = Math.round(compARS + flet + ext);
-  const key = cLast.nombre + '||' + cLast.precio;
-  USER_DB[key] = { costoTotal: tot, compraUSD: compUSD, pesoKg: kg };
-  saveStorage(); toast('Costo guardado ✓','ok');
+  const gan = Math.round(precio - tot);
+  const mar = precio > 0 ? parseFloat(((gan / precio) * 100).toFixed(1)) : 0;
+  // Save in USER_DB (session, gets saved to Firebase/localStorage)
+  const key = cLast.nombre + '||' + precio;
+  USER_DB[key] = { costoTotal: tot, compraUSD: compUSD, pesoKg: kg, ganancia: gan, margen: mar };
+  // Also update COSTS_DB in memory so table shows it immediately
+  const costsKey = Object.keys(COSTS_DB).find(k => k.split('||')[0] === cLast.nombre) || key;
+  COSTS_DB[costsKey] = { ...COSTS_DB[costsKey], costo: tot, ganancia: gan, margen: mar };
+  saveStorage();
+  toast('Costo guardado ✓', 'ok');
   renderCostos();
 }
 
@@ -1420,43 +1428,59 @@ function getCosto(nombre, precio) {
 function renderCostos(resetPage) {
   if (resetPage !== false) cPage = 1;
   initCostosFilter();
-  // Update sin-costo badge in header
-  const totalSinCosto = Object.values(COSTS_DB).filter(c => !c.costo || c.costo === 0).length;
-  const badgeEl = document.getElementById('cos-sin-costo-badge');
-  if (badgeEl) badgeEl.textContent = totalSinCosto > 0 ? `⚠️ ${totalSinCosto} sin costo cargado` : '✓ Todos con costo';
+  // (badge se calcula abajo, después de construir allProds)
   const q = (document.getElementById('cosq')?.value||'').toLowerCase();
   const cat = document.getElementById('coscat')?.value||'';
   const srt = document.getElementById('cossrt')?.value||'md';
   const cargadoFilt = document.getElementById('cos-cargado')?.value || '';
-  // Build unified product list from COSTS_DB (all products) + STOCK_RAW (for stock qty)
+  // Build unified product list — USER_DB tiene prioridad sobre COSTS_DB
   const stockMap = {};
   STOCK_RAW.forEach(s => { stockMap[s.nombre] = s.stock || 0; });
-  // Get all unique products: COSTS_DB + any in STOCK_RAW not in COSTS_DB
   const allProds = {};
-  // First add all from COSTS_DB
+  // 1. COSTS_DB como base
   Object.entries(COSTS_DB).forEach(([key, c]) => {
     const nombre = key.includes('||') ? key.split('||')[0] : key;
     const precio = key.includes('||') ? parseFloat(key.split('||')[1]) || c.precio || 0 : c.precio || 0;
     if (!allProds[nombre] || precio > allProds[nombre].precio) {
-      allProds[nombre] = {
-        nombre, precio, categoria: c.cat || '—',
+      allProds[nombre] = { nombre, precio, categoria: c.cat || c.categoria || '—',
         costo: c.costo || c.costoTotal || 0,
         ganancia: c.ganancia || null, margen: c.margen || null,
         tieneCosto: !!(c.costo || c.costoTotal),
-        stock: stockMap[nombre] ?? null
-      };
+        stock: stockMap[nombre] ?? null };
     }
   });
-  // Add STOCK_RAW products not in COSTS_DB
+  // 2. USER_DB sobreescribe (son los que el usuario guardó manualmente)
+  Object.entries(USER_DB).forEach(([key, u]) => {
+    const nombre = key.includes('||') ? key.split('||')[0] : key;
+    const precio = key.includes('||') ? parseFloat(key.split('||')[1]) || 0 : 0;
+    const costo = u.costoTotal || u.costo || 0;
+    const gan = u.ganancia ?? (precio > 0 ? precio - costo : null);
+    const mar = u.margen ?? (precio > 0 && costo > 0 ? parseFloat(((gan/precio)*100).toFixed(1)) : null);
+    if (!allProds[nombre]) {
+      allProds[nombre] = { nombre, precio, categoria: '—', stock: stockMap[nombre] ?? null };
+    }
+    allProds[nombre].costo = costo;
+    allProds[nombre].ganancia = gan;
+    allProds[nombre].margen = mar;
+    allProds[nombre].tieneCosto = costo > 0;
+  });
+  // 3. STOCK_RAW para productos no en COSTS_DB
   STOCK_RAW.forEach(s => {
     if (!allProds[s.nombre]) {
-      allProds[s.nombre] = {
-        nombre: s.nombre, precio: s.precio, categoria: s.categoria || '—',
-        costo: 0, ganancia: null, margen: null, tieneCosto: false,
-        stock: s.stock || 0
-      };
+      allProds[s.nombre] = { nombre: s.nombre, precio: s.precio, categoria: s.categoria || '—',
+        costo: 0, ganancia: null, margen: null, tieneCosto: false, stock: s.stock || 0 };
+    } else {
+      allProds[s.nombre].stock = s.stock || 0;
+      if (!allProds[s.nombre].categoria || allProds[s.nombre].categoria === '—') {
+        allProds[s.nombre].categoria = s.categoria || '—';
+      }
     }
   });
+  // ── Badge sin costo — ahora con allProds completo ──
+  const totalSinCosto = Object.values(allProds).filter(s => !s.tieneCosto).length;
+  const badgeEl = document.getElementById('cos-sin-costo-badge');
+  if (badgeEl) badgeEl.textContent = totalSinCosto > 0 ? `⚠️ ${totalSinCosto} sin costo cargado` : '✓ Todos con costo';
+
   let items = Object.values(allProds).filter(s => {
     if (cargadoFilt === 'con' && !s.tieneCosto) return false;
     if (cargadoFilt === 'sin' && s.tieneCosto) return false;
@@ -1722,6 +1746,18 @@ function _applyStorageData(data) {
   if (GASTOS_FIJOS.length || GASTOS_VAR.length) {
     gastoNextId = Math.max(...GASTOS_FIJOS.map(g=>g.id||0), ...GASTOS_VAR.map(g=>g.id||0), 104) + 1;
   }
+  // Aplicar USER_DB sobre COSTS_DB en memoria
+  Object.entries(USER_DB).forEach(([key, u]) => {
+    const nombre = key.includes('||') ? key.split('||')[0] : key;
+    const precio = key.includes('||') ? parseFloat(key.split('||')[1]) || 0 : 0;
+    const costo = u.costoTotal || u.costo || 0;
+    const gan = precio > 0 ? precio - costo : 0;
+    const mar = precio > 0 ? parseFloat(((gan/precio)*100).toFixed(1)) : 0;
+    const costsKey = Object.keys(COSTS_DB).find(k => k.split('||')[0] === nombre) || key;
+    if (costsKey && costo > 0) {
+      COSTS_DB[costsKey] = { ...COSTS_DB[costsKey], costo, ganancia: gan, margen: mar };
+    }
+  });
 }
 
 
