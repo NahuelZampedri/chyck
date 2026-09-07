@@ -368,8 +368,8 @@ td.g2{color:var(--g2)}
 
 </style>
 <script type="module">
-  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
-  import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyDvOglFLDHOze9T2x2bUaYGw1mMb9DY1tE",
@@ -380,25 +380,26 @@ td.g2{color:var(--g2)}
     appId: "1:699187603465:web:5c2451acd55213d8dd70d8"
   };
 
-  const fbApp = initializeApp(firebaseConfig);
-  const db = getFirestore(fbApp);
-  const DATA_DOC = doc(db, 'chyck', 'datos');
+  try {
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const DATA_DOC = doc(db, 'chyck', 'datos');
 
-  // Expose to global scope so the main script can use them
-  window._fbReady = true;
-  window._fbSave = async (data) => {
-    await setDoc(DATA_DOC, data);
-  };
-  window._fbLoad = async () => {
-    const snap = await getDoc(DATA_DOC);
-    return snap.exists() ? snap.data() : null;
-  };
-  window._fbListen = (callback) => {
-    return onSnapshot(DATA_DOC, (snap) => {
-      if (snap.exists()) callback(snap.data());
-    });
-  };
-  window.dispatchEvent(new Event('fbready'));
+    window._fbSave = async (data) => {
+      await setDoc(DATA_DOC, data);
+    };
+    window._fbLoad = async () => {
+      const snap = await getDoc(DATA_DOC);
+      return snap.exists() ? snap.data() : null;
+    };
+    window._fbReady = true;
+    window.dispatchEvent(new Event('fbready'));
+    console.log('Firebase ready');
+  } catch(e) {
+    console.warn('Firebase init failed:', e);
+    window._fbReady = false;
+    window.dispatchEvent(new Event('fbready'));
+  }
 </script>
 </head>
 <body>
@@ -1124,7 +1125,8 @@ function renderDash() {
 
   document.getElementById('d-ven').textContent = ars(tot);
   document.getElementById('d-gan').textContent = ars(ganNeta);
-  document.getElementById('d-gans').textContent = 'incl. envío $9K × ' + ords.length + ' órd. = -' + ars(costoEnvios);
+  const costoEnvios = ords.filter(o=>o.canal!=='Presencial').length * ENVIO_POR_ORDEN;
+  document.getElementById('d-gans').textContent = 'incl. envío $9.3K × ' + ords.filter(o=>o.canal!=='Presencial').length + ' órd. online = -' + ars(costoEnvios);
   const mEl = document.getElementById('d-mar');
   mEl.textContent = margenReal.toFixed(1) + '%';
   mEl.style.color = margenReal > 40 ? 'var(--green)' : margenReal > 25 ? 'var(--yellow)' : 'var(--red)';
@@ -1643,37 +1645,52 @@ async function saveStorage() {
       proy:        PROY,
       dolar:       DOLAR || 1435
     };
-    // 1. localStorage inmediato (offline backup)
-    localStorage.setItem('chyck_data', JSON.stringify(data));
-    // 2. Firebase (sync entre dispositivos)
-    if (window._fbReady && window._fbSave) {
-      await window._fbSave(data);
+    // 1. Guardar en localStorage (siempre funciona, offline)
+    try { localStorage.setItem('chyck_data', JSON.stringify(data)); } catch(e) {}
+    // 2. Guardar en Firebase (sync entre dispositivos)
+    if (window._fbReady && typeof window._fbSave === 'function') {
+      try {
+        await window._fbSave(data);
+        console.log('Guardado en Firebase ✓');
+      } catch(e) {
+        console.warn('Firebase save failed:', e);
+      }
     }
     showSaved();
   } catch(e) {
-    console.error('Error guardando:', e);
-    showSaved();
+    console.error('saveStorage error:', e);
+    try { showSaved(); } catch(_) {}
   }
 }
 
+
 async function loadStorage() {
-  try {
-    // Intentar Firebase primero
-    if (window._fbReady && window._fbLoad) {
+  // Esperar Firebase con timeout de 3 segundos
+  if (!window._fbReady) {
+    await new Promise(resolve => {
+      const timeout = setTimeout(resolve, 3000);
+      window.addEventListener('fbready', () => { clearTimeout(timeout); resolve(); }, { once: true });
+    });
+  }
+  // Intentar Firebase
+  if (window._fbReady && typeof window._fbLoad === 'function') {
+    try {
       const data = await window._fbLoad();
       if (data && Object.keys(data).length > 0) {
         _applyStorageData(data);
+        console.log('Datos cargados de Firebase ✓');
         return;
       }
+    } catch(e) {
+      console.warn('Firebase load failed:', e);
     }
-  } catch(e) {
-    console.warn('Firebase load failed, usando localStorage:', e);
   }
   // Fallback: localStorage
   try {
     const raw = localStorage.getItem('chyck_data');
     if (raw) {
       _applyStorageData(JSON.parse(raw));
+      console.log('Datos cargados de localStorage');
     } else {
       GASTOS_FIJOS = JSON.parse(JSON.stringify(DEFAULT_GASTOS_FIJOS));
       GASTOS_VAR   = JSON.parse(JSON.stringify(DEFAULT_GASTOS_VAR));
@@ -1685,6 +1702,7 @@ async function loadStorage() {
     PARCELS = [];
   }
 }
+
 
 function _applyStorageData(data) {
   if (data.userDB)      USER_DB = data.userDB;
