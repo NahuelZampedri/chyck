@@ -1476,8 +1476,16 @@ function renderCostos(resetPage) {
       }
     }
   });
-  // ── Badge sin costo — ahora con allProds completo ──
-  const totalSinCosto = Object.values(allProds).filter(s => !s.tieneCosto).length;
+  // ── Badge sin costo ──
+  // Un producto tiene costo si está en USER_DB O si COSTS_DB lo tiene con costo > 0
+  const nombresConCosto = new Set([
+    ...Object.keys(USER_DB).map(k => k.split('||')[0]),
+    ...Object.keys(COSTS_DB).filter(k => {
+      const c = COSTS_DB[k];
+      return (c.costo > 0 || c.costoTotal > 0);
+    }).map(k => k.split('||')[0])
+  ]);
+  const totalSinCosto = Object.keys(allProds).filter(n => !nombresConCosto.has(n)).length;
   const badgeEl = document.getElementById('cos-sin-costo-badge');
   if (badgeEl) badgeEl.textContent = totalSinCosto > 0 ? `⚠️ ${totalSinCosto} sin costo cargado` : '✓ Todos con costo';
 
